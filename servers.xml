@@ -1,0 +1,101 @@
+<?php
+require_once 'myMyPlex.inc';
+
+# Bail if we're not happy with the auth token in the URL
+$auth = '';
+if (array_key_exists('auth_token', $_GET) && strlen($_GET['auth_token'])) {
+	$auth = preg_replace('/\W/', '', $_GET['auth_token']);
+}
+if ($auth == '' || $auth != $_GET['auth_token']) {
+	header('HTTP/1.1 401 Authorization Required');
+	die("Invalid auth token\n");
+}
+
+# Lookup the user
+$user = get_user('', $auth);
+if (! $user['username']) {
+	header('HTTP/1.1 401 Authorization Required');
+	die("Unknown auth token\n");
+}
+
+# Handle deletes
+if ($_SERVER['REQUEST_METHOD'] == 'DELETE') {
+	if (preg_match('/\/(\w+)\.xml\?/', $_SERVER['REQUEST_URI'], $parts)) {
+		delete_server($parts[1]);
+		header('HTTP/1.1 200 OK');
+		exit(0);
+	} else {
+		header('HTTP/1.1 422 Unprocessable Entity');
+		die("Invalid machine ID\n");
+	}
+}
+
+# Parse the input XML
+$doc = new DOMDocument();
+$doc->loadXML(file_get_contents('php://input'));
+$elm = $doc->getElementsByTagName('MediaContainer')->item(0);
+$elm = $elm->getElementsByTagName('Server')->item(0);
+$server = array();
+foreach (array('name', 'host', 'address', 'port', 'machineIdentifier', 'version') as $key) {
+	$server[$key] = $elm->getAttribute($key);
+
+	# Only keep valid data
+	if (preg_replace('/[^\w\.\-]/', '', $server[$key]) != $server[$key]) {
+		$server[$key] = '';
+	}
+}
+
+# Ensure the data is reasonable
+$server['port'] = intval($server['port']);
+if ($server['port'] < 1 || $server['port'] > 65535) {
+	$server['port'] = '';
+}
+preg_match('/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/', $server['address'], $ip_parts);
+if (count($ip_parts) == 5) {
+	unset($ip_parts[0]);
+	foreach ($ip_parts as $part) {
+		$part = intval($part);
+		if ($part < 1 || $part > 254) {
+			$server['address'] = '';
+		}
+	}
+} else {
+	$server['address'] = '';
+}
+if (
+	strlen($server['name']) < 1 ||
+	strlen($server['address']) < 1 ||
+	strlen($server['port']) < 1 ||
+	strlen($server['version']) < 1 ||
+	strlen($server['machineIdentifier']) < 1
+) {
+	header('HTTP/1.1 422 Unprocessable Entity');
+	die("Invalid name, address, port, ID, or version\n");
+}
+
+# Register the server
+$server['username'] = $user['username'];
+$server['id'] = $server['machineIdentifier'];
+save_server($server);
+
+# Build an XML response
+$doc = new DomDocument('1.0');
+$root = $doc->createElement('MediaContainer');
+$root = $doc->appendChild($root);
+
+$elm = $doc->createElement('Server');
+$elm->setAttribute('name', $server['name']);
+$elm->setAttribute('address', $server['address']);
+$elm->setAttribute('port', $server['port']);
+$elm->setAttribute('updatedAt', date('U'));
+$elm->setAttribute('machineIdentifier', $server['machineIdentifier']);
+$elm->setAttribute('createdAt', date('U'));
+$elm->setAttribute('owned', '1');
+$elm->setAttribute('host', $server['host']);
+$elm = $root->appendChild($elm);
+
+# Send our XML to the PMS
+header('HTTP/1.1 201 Created');
+print $doc->saveXML();
+
+?>

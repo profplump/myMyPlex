@@ -1,0 +1,44 @@
+<?php
+require_once '../myMyPlex.inc';
+
+# Bail if we're not happy with the auth provied by the HTTP server
+$username = '';
+if (array_key_exists('PHP_AUTH_USER', $_SERVER) && strlen($_SERVER['PHP_AUTH_USER'])) {
+	$username = preg_replace('/\W/', '', $_SERVER['PHP_AUTH_USER']);
+}
+if ($username == '' || $username != $_SERVER['PHP_AUTH_USER']) {
+	header('HTTP/1.1 401 Authorization Required');
+	die("Invalid username/password\n");
+}
+
+# Lookup or generate an auth token
+$user = get_user($username);
+if (! $user['auth']) {
+	$user['username'] = $username;
+	$user['auth'] = generate_auth();
+	save_user($user);
+}
+
+# Build an XML document
+$doc = new DomDocument('1.0');
+$root = $doc->createElement('user');
+$root = $doc->appendChild($root);
+	
+$elm = $doc->createElement('joined-at', date('c'));
+$elm->setAttribute('type', 'datetime');
+$elm = $root->appendChild($elm);
+
+$elm = $doc->createElement('username', $username);
+$elm = $root->appendChild($elm);
+
+$elm = $doc->createElement('email', $username . '@localhost');
+$elm = $root->appendChild($elm);
+
+$elm = $doc->createElement('authentication-token', $user['auth']);
+$elm = $root->appendChild($elm);
+
+# Send our XML to the PMS
+header('HTTP/1.1 201 Created');
+print $doc->saveXML();
+
+?>
